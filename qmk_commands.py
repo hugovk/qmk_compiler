@@ -9,16 +9,23 @@ from dhooks import Embed, Webhook
 import qmk_storage
 from qmk_errors import NoSuchKeyboardError
 
-CHIBIOS_GIT_BRANCH = os.environ.get('GIT_BRANCH', 'qmk')
+# If GIT_BRANCH is set copy it to any unset GIT_BRANCH var
+if os.environ.get('GIT_BRANCH'):
+    for var in ('CHIBIOS_GIT_BRANCH', 'CHIBIOS_CONTRIB_GIT_BRANCH', 'QMK_GIT_BRANCH'):
+        if var not in os.environ:
+            os.environ[var] = os.environ['GIT_BRANCH']
+
+# Setup our environment
+CHIBIOS_GIT_BRANCH = os.environ.get('CHIBIOS_GIT_BRANCH', 'qmk')
 CHIBIOS_GIT_URL = os.environ.get('CHIBIOS_GIT_URL', 'https://github.com/qmk/ChibiOS')
-CHIBIOS_CONTRIB_GIT_BRANCH = os.environ.get('GIT_BRANCH', 'qmk')
+CHIBIOS_CONTRIB_GIT_BRANCH = os.environ.get('CHIBIOS_CONTRIB_GIT_BRANCH', 'qmk')
 CHIBIOS_CONTRIB_GIT_URL = os.environ.get('CHIBIOS_CONTRIB_GIT_URL', 'https://github.com/qmk/ChibiOS-Contrib')
 DISCORD_WARNING_SENT = False
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_URL')
 DISCORD_WEBHOOK_INFO_URL = os.environ.get('DISCORD_WEBHOOK_INFO_URL', DISCORD_WEBHOOK_URL)
 DISCORD_WEBHOOK_WARNING_URL = os.environ.get('DISCORD_WEBHOOK_WARNING_URL', DISCORD_WEBHOOK_URL)
 DISCORD_WEBHOOK_ERROR_URL = os.environ.get('DISCORD_WEBHOOK_ERROR_URL', DISCORD_WEBHOOK_URL)
-QMK_GIT_BRANCH = os.environ.get('GIT_BRANCH', 'master')
+QMK_GIT_BRANCH = os.environ.get('QMK_GIT_BRANCH', 'master')
 QMK_GIT_URL = os.environ.get('QMK_GIT_URL', 'https://github.com/qmk/qmk_firmware.git')
 ZIP_EXCLUDES = {
     'qmk_firmware': ('qmk_firmware/.build/*', 'qmk_firmware/.git/*', 'qmk_firmware/lib/chibios/.git', 'qmk_firmware/lib/chibios-contrib/.git'),
@@ -133,10 +140,10 @@ def git_clone(git_url=QMK_GIT_URL, git_branch=QMK_GIT_BRANCH):
     command = ['git', 'clone', '--single-branch', '-b', git_branch, git_url, repo]
 
     try:
+        logging.debug('Cloning qmk_firmware: %s', ' '.join(command))
         check_output(command, stderr=STDOUT, universal_newlines=True)
         os.chdir(repo)
-        hash = check_output(['git', 'rev-parse', 'HEAD'])
-        open('version.txt', 'w').write(hash.decode('cp437') + '\n')
+        write_version_txt()
         repo_cloned = True
 
     except CalledProcessError as build_error:
@@ -152,7 +159,7 @@ def git_clone(git_url=QMK_GIT_URL, git_branch=QMK_GIT_BRANCH):
     return True
 
 
-def fetch_source(repo):
+def fetch_source(repo, uncompress=True):
     """Retrieve a copy of source from storage.
     """
     repo_zip = repo + '.zip'
@@ -170,11 +177,19 @@ def fetch_source(repo):
     with open(repo_zip, 'xb') as zipfile:
         zipfile.write(zipfile_data)
 
+    if uncompress:
+        return unzip_source(repo_zip)
+    else:
+        return True
+
+
+def unzip_source(repo_zip):
+    """Unzip a source repo.
+    """
     zip_command = ['unzip', repo_zip]
     try:
-        logging.debug('Unzipping %s Source: %s', (repo, zip_command))
+        logging.debug('Unzipping Source: %s', zip_command)
         check_output(zip_command)
-        os.remove(repo_zip)
         return True
 
     except CalledProcessError as build_error:
@@ -193,39 +208,15 @@ def find_keymap_path(keyboard, keymap):
     raise NoSuchKeyboardError('Could not find keymaps directory for: %s' % keyboard)
 
 
-def store_keymap(zipfile_name, keyboard, keymap_name, storage_directory):
-    """Store a copy of the keymap in storage.
-    """
-    start_dir = os.getcwd()
-    keymap_path = find_keymap_path(keyboard, keymap_name)
-    os.chdir(keymap_path + '/..')
-    try:
-        zip_command = ['zip', '-r', zipfile_name, keymap_name]
-        if os.path.exists(zipfile_name):
-            os.remove(zipfile_name)
-
-        try:
-            logging.debug('Zipping Keymap: %s', zip_command)
-            check_output(zip_command)
-        except CalledProcessError as build_error:
-            logging.error('Could not zip keymap, Return Code %s, Command %s', build_error.returncode, build_error.cmd)
-            logging.error(build_error.output)
-            os.remove(zipfile_name)
-            return False
-
-        qmk_storage.save_file(zipfile_name, os.path.join(storage_directory, zipfile_name))
-        os.remove(zipfile_name)
-    finally:
-        os.chdir(start_dir)
-
-
 def store_source(zipfile_name, directory, storage_directory):
     """Store a copy of source in storage.
     """
     if directory in ZIP_EXCLUDES:
-        zip_command = ['zip', '-x ' + '-x'.join(ZIP_EXCLUDES[directory]), '-r', zipfile_name, directory]
+        excludes = ['-x'] * (len(ZIP_EXCLUDES[directory]) * 2)
+        excludes[1::2] = ZIP_EXCLUDES[directory]
+        zip_command = ['zip'] + excludes + ['-q', '-r', zipfile_name, directory]
     else:
-        zip_command = ['zip', '-r', zipfile_name, directory]
+        zip_command = ['zip', '-q', '-r', zipfile_name, directory]
 
     if os.path.exists(zipfile_name):
         os.remove(zipfile_name)
@@ -289,3 +280,11 @@ def repo_name(git_url):
         name = name[:-4]
 
     return name.lower()
+
+
+def write_version_txt():
+    """Write the current git hash to version.txt.
+    """
+    hash = check_output(['git', 'rev-parse', 'HEAD'])
+    with open('version.txt', 'w') as fd:
+        fd.write(hash.decode('cp437') + '\n')
