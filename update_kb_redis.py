@@ -412,7 +412,7 @@ def find_keymaps(keyboard):
             keymaps.append(keymaps_path % (keyboard, path))
 
     for keymap_folder in keymaps:
-        for keymap in listdir(keymap_folder):
+        for keymap in sorted(listdir(keymap_folder)):
             keymap_file = '%s/%s/keymap.c' % (keymap_folder, keymap)
             if exists(keymap_file):
                 layout_macro, layers = extract_keymap(keymap_file)
